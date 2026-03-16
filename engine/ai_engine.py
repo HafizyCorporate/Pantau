@@ -12,7 +12,30 @@ class AIEngine:
         self.model_helm = YOLO(HELMET_MODEL)
         self.model_plat = YOLO(PLATE_MODEL)
         self.reader = easyocr.Reader(['en'], gpu=False)
-        self.PIXEL_PER_METER = 40.0
+
+        # Kalibrasi: berapa pixel = 1 meter (sesuaikan dengan kamera kamu)
+        self.PIXEL_PER_METER = 8.0
+
+        # Noise threshold: gerakan < N pixel diabaikan (bukan kecepatan)
+        self.MIN_PIXEL_MOVE = 8.0
+
+        # Buffer histori kecepatan per kendaraan untuk smoothing
+        self.speed_history = {}
+        self.HISTORY_SIZE = 5
+
+    def _smooth_speed(self, vehicle_id, new_speed):
+        if vehicle_id not in self.speed_history:
+            self.speed_history[vehicle_id] = []
+        history = self.speed_history[vehicle_id]
+        history.append(new_speed)
+        if len(history) > self.HISTORY_SIZE:
+            history.pop(0)
+        # Buang outlier: kalau tiba-tiba 3x lebih besar dari rata-rata, abaikan
+        if len(history) >= 3:
+            avg = sum(history[:-1]) / len(history[:-1])
+            if avg > 0 and history[-1] > avg * 3:
+                history[-1] = avg
+        return sum(history) / len(history)
 
     def cek_plat_indonesia(self, teks_list):
         teks = "".join(teks_list).upper()
@@ -28,61 +51,66 @@ class AIEngine:
         max_area_pelanggar = 0
         kotak_motor_pelanggar = None
         kecepatan_pelanggar = 0
-        
+
         hasil_kendaraan = self.model_kendaraan(frame, conf=0.45, classes=[2, 3, 5, 7], imgsz=640, verbose=False)
         hasil_helm = self.model_helm(frame, conf=0.45, imgsz=640, verbose=False)
         hasil_plat = self.model_plat(frame, conf=0.35, imgsz=960, verbose=False)
-        
+
         kendaraan_mentah = []
         for box in hasil_kendaraan[0].boxes:
             cls_id = int(box.cls[0])
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             kendaraan_mentah.append({'box': (x1, y1, x2, y2), 'cls': cls_id})
-                
+
         current_centers = []
         tracked_vehicles = []
-        for v in kendaraan_mentah:
+
+        for idx, v in enumerate(kendaraan_mentah):
             x1, y1, x2, y2 = v['box']
             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
             current_centers.append((cx, cy))
-            
-            is_moving = True
-            speed_kmh = 0
+
+            is_moving = False
+            speed_kmh = 0.0
+
             if prev_centers:
+                # Cari kendaraan terdekat dari frame sebelumnya
                 dists = [np.hypot(cx - px, cy - py) for px, py in prev_centers]
-                if dists:
-                    jarak_pixel = min(dists)
-                    if jarak_pixel < 4.0:
-                        is_moving = False
-                    else:
-                        is_moving = True
-                        jarak_meter = jarak_pixel / self.PIXEL_PER_METER
-                        speed_kmh = (jarak_meter * fps_video) * 3.6
-                        if speed_kmh > 120: speed_kmh = 120
-                    
+                jarak_pixel = min(dists)
+
+                if jarak_pixel >= self.MIN_PIXEL_MOVE:
+                    is_moving = True
+                    jarak_meter = jarak_pixel / self.PIXEL_PER_METER
+                    raw_speed = (jarak_meter * fps_video) * 3.6
+                    # Smoothing per kendaraan
+                    speed_kmh = self._smooth_speed(idx, raw_speed)
+                    # Hard cap maksimum realistis
+                    speed_kmh = min(speed_kmh, 100.0)
+
             v['speed'] = speed_kmh
             v['status'] = "MOVING" if is_moving else "STOPPED"
             tracked_vehicles.append(v)
-            
+
             nama = "MOTOR" if v['cls'] == 3 else ("MOBIL" if v['cls'] == 2 else ("BUS" if v['cls'] == 5 else "TRUK"))
-            teks_speed = f"{nama} | {int(speed_kmh)} KM/H" if is_moving else f"{nama} | STOP"
+            teks_speed = f"{nama} | {int(speed_kmh)} KM/H" if is_moving else f"{nama} | BERHENTI"
             warna_kendaraan = (0, 165, 255) if v['cls'] != 3 else (200, 200, 200)
             cv2.rectangle(frame_gambar, (x1, y1), (x2, y2), warna_kendaraan, 1)
             cv2.putText(frame_gambar, teks_speed, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, warna_kendaraan, 1)
 
+        # VALIDASI PLAT INDONESIA
         valid_plates = []
         for box in hasil_plat[0].boxes:
             px1, py1, px2, py2 = map(int, box.xyxy[0])
             pcx, pcy = (px1 + px2) // 2, (py1 + py2) // 2
             lebar_plat = px2 - px1
-            
+
             is_valid_position = False
             for v in tracked_vehicles:
                 vx1, vy1, vx2, vy2 = v['box']
                 v_cls = v['cls']
                 vw = vx2 - vx1
                 vh = vy2 - vy1
-                
+
                 if (vx1 - 30) <= pcx <= (vx2 + 30) and (vy1 - 30) <= pcy <= (vy2 + 30):
                     if v_cls == 3:
                         if pcy < (vy1 + vh * 0.4) or pcy > (vy1 + vh * 0.6) or pcx < (vx1 + vw * 0.2) or pcx > (vx1 + vw * 0.8):
@@ -92,7 +120,7 @@ class AIEngine:
                         if pcy > (vy1 + vh * 0.4):
                             is_valid_position = True
                             break
-            
+
             if is_valid_position and lebar_plat > 20:
                 potongan_plat = frame[py1:py2, px1:px2]
                 if potongan_plat.size > 0:
@@ -108,21 +136,21 @@ class AIEngine:
                     except:
                         pass
 
+        # ANALISIS HELM
         current_head_centers = []
         for box in hasil_helm[0].boxes:
             hx1, hy1, hx2, hy2 = map(int, box.xyxy[0])
-            conf = float(box.conf[0])
             kelas_id = int(box.cls[0])
             nama_objek = self.model_helm.names[kelas_id].lower()
-            
+
             hcx, hcy = (hx1 + hx2) // 2, (hy1 + hy2) // 2
             h_area = (hx2 - hx1) * (hy2 - hy1)
             current_head_centers.append((hcx, hcy))
-            
+
             status_kepala = "PEJALAN_KAKI"
             motor_terkait = None
             kecepatan_terkait = 0
-            
+
             for v in tracked_vehicles:
                 if v['cls'] == 3:
                     mx1, my1, mx2, my2 = v['box']
@@ -133,7 +161,7 @@ class AIEngine:
                         motor_terkait = v['box']
                         kecepatan_terkait = v['speed']
                         break
-            
+
             if status_kepala == "PEJALAN_KAKI":
                 warna = (128, 128, 128)
                 label = "PEJALAN KAKI"
@@ -152,12 +180,12 @@ class AIEngine:
                 else:
                     warna = (0, 255, 0)
                     label = f"HELM | {int(kecepatan_terkait)} KMH"
-                    
+
             cv2.rectangle(frame_gambar, (hx1, hy1), (hx2, hy2), warna, 2)
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
             cv2.rectangle(frame_gambar, (hx1, hy1 - 20), (hx1 + tw, hy1), warna, -1)
             cv2.putText(frame_gambar, label, (hx1, hy1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            
+
         all_centers_memory = current_centers + current_head_centers
 
         return {
