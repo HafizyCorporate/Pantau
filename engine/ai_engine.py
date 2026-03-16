@@ -27,9 +27,8 @@ class AIEngine:
         jumlah_pelanggar = 0
         max_area_pelanggar = 0
         kotak_motor_pelanggar = None
-        kecepatan_pelanggar = 0 
+        kecepatan_pelanggar = 0
         
-        # Resolusi dipisah biar enteng: Kendaraan 640, Plat 960
         hasil_kendaraan = self.model_kendaraan(frame, conf=0.45, classes=[2, 3, 5, 7], imgsz=640, verbose=False)
         hasil_helm = self.model_helm(frame, conf=0.45, imgsz=640, verbose=False)
         hasil_plat = self.model_plat(frame, conf=0.35, imgsz=960, verbose=False)
@@ -40,7 +39,6 @@ class AIEngine:
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             kendaraan_mentah.append({'box': (x1, y1, x2, y2), 'cls': cls_id})
                 
-        # RADAR KECEPATAN
         current_centers = []
         tracked_vehicles = []
         for v in kendaraan_mentah:
@@ -54,13 +52,13 @@ class AIEngine:
                 dists = [np.hypot(cx - px, cy - py) for px, py in prev_centers]
                 if dists:
                     jarak_pixel = min(dists)
-                    if jarak_pixel < 4.0: 
-                        is_moving = False 
+                    if jarak_pixel < 4.0:
+                        is_moving = False
                     else:
                         is_moving = True
                         jarak_meter = jarak_pixel / self.PIXEL_PER_METER
-                        speed_kmh = (jarak_meter * fps_video) * 3.6 
-                        if speed_kmh > 120: speed_kmh = 120 
+                        speed_kmh = (jarak_meter * fps_video) * 3.6
+                        if speed_kmh > 120: speed_kmh = 120
                     
             v['speed'] = speed_kmh
             v['status'] = "MOVING" if is_moving else "STOPPED"
@@ -72,7 +70,6 @@ class AIEngine:
             cv2.rectangle(frame_gambar, (x1, y1), (x2, y2), warna_kendaraan, 1)
             cv2.putText(frame_gambar, teks_speed, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, warna_kendaraan, 1)
 
-        # VALIDASI PLAT INDONESIA & ANTI JAKET
         valid_plates = []
         for box in hasil_plat[0].boxes:
             px1, py1, px2, py2 = map(int, box.xyxy[0])
@@ -87,16 +84,16 @@ class AIEngine:
                 vh = vy2 - vy1
                 
                 if (vx1 - 30) <= pcx <= (vx2 + 30) and (vy1 - 30) <= pcy <= (vy2 + 30):
-                    if v_cls == 3: 
+                    if v_cls == 3:
                         if pcy < (vy1 + vh * 0.4) or pcy > (vy1 + vh * 0.6) or pcx < (vx1 + vw * 0.2) or pcx > (vx1 + vw * 0.8):
                             is_valid_position = True
                             break
-                    else: 
-                        if pcy > (vy1 + vh * 0.4): 
+                    else:
+                        if pcy > (vy1 + vh * 0.4):
                             is_valid_position = True
                             break
             
-            if is_valid_position and lebar_plat > 20: 
+            if is_valid_position and lebar_plat > 20:
                 potongan_plat = frame[py1:py2, px1:px2]
                 if potongan_plat.size > 0:
                     try:
@@ -104,14 +101,13 @@ class AIEngine:
                         teks_hasil = self.reader.readtext(plat_zoom, detail=0, allowlist='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ')
                         if teks_hasil:
                             plat_resmi = self.cek_plat_indonesia(teks_hasil)
-                            if plat_resmi: 
+                            if plat_resmi:
                                 valid_plates.append((px1, py1, px2, py2))
                                 cv2.rectangle(frame_gambar, (px1, py1), (px2, py2), (255, 0, 0), 2)
                                 cv2.putText(frame_gambar, plat_resmi, (px1, py1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     except:
                         pass
 
-        # ANALISIS HELM & PEJALAN KAKI
         current_head_centers = []
         for box in hasil_helm[0].boxes:
             hx1, hy1, hx2, hy2 = map(int, box.xyxy[0])
@@ -144,9 +140,9 @@ class AIEngine:
             elif status_kepala == "STOPPED":
                 warna = (0, 255, 255)
                 label = "BERHENTI (AMAN)"
-            else: 
+            else:
                 if "no" in nama_objek or "without" in nama_objek or "bare" in nama_objek:
-                    warna = (0, 0, 255) 
+                    warna = (0, 0, 255)
                     label = f"NO HELM | {int(kecepatan_terkait)} KMH"
                     jumlah_pelanggar += 1
                     if h_area > max_area_pelanggar:
@@ -154,7 +150,7 @@ class AIEngine:
                         kotak_motor_pelanggar = motor_terkait
                         kecepatan_pelanggar = kecepatan_terkait
                 else:
-                    warna = (0, 255, 0) 
+                    warna = (0, 255, 0)
                     label = f"HELM | {int(kecepatan_terkait)} KMH"
                     
             cv2.rectangle(frame_gambar, (hx1, hy1), (hx2, hy2), warna, 2)
