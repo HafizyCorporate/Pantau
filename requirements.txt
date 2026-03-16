@@ -1,0 +1,8 @@
+ultralytics==8.0.196
+opencv-python-headless
+numpy
+easyocr
+Flask
+pyTelegramBotAPI
+psycopg2-binary
+python-dotenv
