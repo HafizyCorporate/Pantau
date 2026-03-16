@@ -15,8 +15,6 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN pip install gdown
-
 RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False)"
 
 COPY . .
@@ -26,6 +24,6 @@ RUN mkdir -p temp models
 RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')" && \
     mv yolov8n.pt models/yolov8n.pt || true
 
-RUN gdown --fuzzy "https://drive.google.com/file/d/1SALSjn9DEzddXYYOsOvm3bGKQmXeiqlX/view?usp=drivesdk" -O models/seatbelt.pt
+RUN wget -q "https://github.com/HafizyCorporate/Pantau/releases/download/v1.0/seatbelt.pt" -O models/seatbelt.pt
 
 CMD ["python", "app.py"]
