@@ -9,18 +9,17 @@ def process_video(input_path, output_path, ai_engine):
     fps_asli = int(cap.get(cv2.CAP_PROP_FPS))
     if fps_asli == 0: fps_asli = 30
     
-    # 10 FPS + Frame Skip = Super aman buat server Docker kecil
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_path, fourcc, 10, (w, h)) 
+    out = cv2.VideoWriter(output_path, fourcc, 10, (w, h))
     
     largest_violator = 0
-    best_frame = None 
+    best_frame = None
     best_clean = None
     target_box = None
     all_plates = []
     final_speed = 0
     waktu_ms = 0
-    prev_centers = [] 
+    prev_centers = []
     frame_count = 0
     
     while cap.isOpened():
@@ -30,8 +29,7 @@ def process_video(input_path, output_path, ai_engine):
         frame_count += 1
         current_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
         
-        # PROSES 1 FRAME, SKIP 2 FRAME (Biar gak meledak RAM-nya)
-        if frame_count % 3 != 0: continue 
+        if frame_count % 3 != 0: continue
             
         hasil = ai_engine.process_frame(frame, prev_centers, fps_asli)
         prev_centers = hasil["centers"]
@@ -50,7 +48,6 @@ def process_video(input_path, output_path, ai_engine):
     cap.release()
     out.release()
     
-    # BACA PLAT BUKTI
     if best_frame is not None and largest_violator > 0:
         plat_pelanggar = "Tidak Terbaca"
         if target_box is not None and len(all_plates) > 0:
