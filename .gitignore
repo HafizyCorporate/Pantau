@@ -1,0 +1,11 @@
+.env
+models/helmet.pt
+models/license_plate_detector.pt
+temp/
+*.mp4
+*.jpg
+*.jpeg
+*.png
+__pycache__/
+*.pyc
+.EasyOCR/
