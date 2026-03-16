@@ -15,6 +15,9 @@ def start(message):
 
 @bot.message_handler(content_types=['video', 'document'])
 def handle_video(message):
+    if ai_engine is None:
+        bot.reply_to(message, "⚠️ AI Engine belum siap, tunggu beberapa detik lalu coba lagi.")
+        return
     bot.reply_to(message, "⚙️ [SYSTEM] Memproses Video... (Arsitektur MVC Docker Aktif!)")
     
     ts = int(time.time())
