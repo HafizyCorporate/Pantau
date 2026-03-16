@@ -7,7 +7,7 @@ from engine.ai_engine import AIEngine
 from engine.video_processor import process_video
 
 bot = telebot.TeleBot(BOT_TOKEN)
-ai_engine = None 
+ai_engine = None
 
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -18,6 +18,7 @@ def handle_video(message):
     if ai_engine is None:
         bot.reply_to(message, "⚠️ AI Engine belum siap, tunggu beberapa detik lalu coba lagi.")
         return
+
     bot.reply_to(message, "⚙️ [SYSTEM] Memproses Video... (Arsitektur MVC Docker Aktif!)")
     
     ts = int(time.time())
@@ -68,7 +69,6 @@ def handle_video(message):
     except Exception as e:
         bot.reply_to(message, f"❌ [ERROR] {str(e)}")
     finally:
-        # Garbage Collector Mutlak: Hapus sisa file biar DB Docker gak penuh!
         if os.path.exists(input_path): os.remove(input_path)
         if os.path.exists(output_path): os.remove(output_path)
 
