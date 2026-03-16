@@ -22,8 +22,6 @@ if __name__ == "__main__":
         
     init_db()
     
-    # Flask berjalan di background thread (WAJIB BUAT RAILWAY)
     threading.Thread(target=run_flask, daemon=True).start()
     
-    # Bot berjalan di main thread
     start_bot()
