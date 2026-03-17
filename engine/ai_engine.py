@@ -38,40 +38,21 @@ class AIEngine:
         self.wrong_way_counter = {}
 
     def _enhance_frame(self, frame):
-        """
-        Preprocessing frame untuk kamera kualitas rendah.
-        Perbaiki kecerahan, kontras, dan ketajaman.
-        """
         try:
-            # 1. Denoise ringan - kurangi noise kamera jelek
             frame = cv2.fastNlMeansDenoisingColored(frame, None, 5, 5, 7, 21)
-
-            # 2. Konversi ke LAB untuk perbaiki kecerahan saja tanpa merusak warna
             lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
             l, a, b = cv2.split(lab)
-
-            # 3. CLAHE - perbaiki kontras secara lokal
             clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
             l = clahe.apply(l)
-
-            # 4. Boost kecerahan kalau frame terlalu gelap
             mean_brightness = np.mean(l)
             if mean_brightness < 80:
                 l = cv2.add(l, np.array([30.0]))
-
-            # 5. Gabung kembali
             lab = cv2.merge((l, a, b))
             frame = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
-
-            # 6. Sharpen
-            kernel = np.array([[0, -1, 0],
-                               [-1, 5, -1],
-                               [0, -1, 0]])
+            kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
             frame = cv2.filter2D(frame, -1, kernel)
-
         except Exception as e:
             print(f"[WARNING] Enhance frame gagal: {e}")
-
         return frame
 
     def _estimasi_pixel_per_meter(self, box_height):
@@ -149,24 +130,19 @@ class AIEngine:
         lane = self._get_lane(cx)
         dominant = self.dominant_left if lane == "left" else self.dominant_right
         count = self.dominant_left_count if lane == "left" else self.dominant_right_count
-
         if dominant is None or count < self.MIN_VEHICLES_FOR_DIRECTION:
             return False
-
         avg_dx, avg_dy = self._get_avg_direction(vehicle_id)
         if abs(avg_dy) < 4:
             return False
-
         is_opposite = False
         if dominant == "DOWN" and avg_dy < -5:
             is_opposite = True
         if dominant == "UP" and avg_dy > 5:
             is_opposite = True
-
         if not is_opposite:
             self.wrong_way_counter[vehicle_id] = 0
             return False
-
         self.wrong_way_counter[vehicle_id] = self.wrong_way_counter.get(vehicle_id, 0) + 1
         return self.wrong_way_counter[vehicle_id] >= self.MIN_WRONG_WAY_FRAMES
 
@@ -200,9 +176,7 @@ class AIEngine:
             return None
 
     def process_frame(self, frame, prev_centers, fps_video):
-        # Enhance frame dulu sebelum diproses AI
         frame = self._enhance_frame(frame)
-
         frame_gambar = frame.copy()
         h_frame, w_frame = frame.shape[:2]
         self.frame_width = w_frame
@@ -214,8 +188,11 @@ class AIEngine:
         kecepatan_pelanggar = 0
         pelanggaran_pelanggar = "Pelanggaran Lalu Lintas"
 
+        # Daftar semua pelanggaran di frame ini untuk screenshot multiple
+        semua_pelanggaran = []
+
         hasil_kendaraan = self.model_kendaraan(frame, conf=0.4, classes=[2, 3, 5, 7], imgsz=640, verbose=False)
-        hasil_helm = self.model_helm(frame, conf=0.4, imgsz=640, verbose=False)
+        hasil_helm = self.model_helm(frame, conf=0.25, imgsz=640, verbose=False)
         hasil_plat = self.model_plat(frame, conf=0.25, imgsz=1280, verbose=False)
 
         kendaraan_mentah = []
@@ -333,7 +310,6 @@ class AIEngine:
             px1, py1, px2, py2 = map(int, box.xyxy[0])
             pcx, pcy = (px1 + px2) // 2, (py1 + py2) // 2
             lebar_plat = px2 - px1
-
             is_valid_position = False
             for v in tracked_vehicles:
                 vx1, vy1, vx2, vy2 = v['box']
@@ -342,10 +318,8 @@ class AIEngine:
                 if (vx1 - vw*0.5) <= pcx <= (vx2 + vw*0.5) and (vy1 - vh*0.3) <= pcy <= (vy2 + vh*0.3):
                     is_valid_position = True
                     break
-
             if not is_valid_position and lebar_plat > 30:
                 is_valid_position = True
-
             if is_valid_position and lebar_plat > 15:
                 plat_resmi = self.baca_plat(frame, px1, py1, px2, py2)
                 if plat_resmi:
@@ -354,11 +328,15 @@ class AIEngine:
                     label_x = max(0, min(px1, w_frame - 150))
                     cv2.putText(frame_gambar, plat_resmi, (label_x, max(15, py1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
+        # ANALISIS HELM - conf rendah + logika motor terdekat
         current_head_centers = []
+        ada_motor = any(v['cls'] == 3 for v in tracked_vehicles)
+
         for box in hasil_helm[0].boxes:
             hx1, hy1, hx2, hy2 = map(int, box.xyxy[0])
             kelas_id = int(box.cls[0])
             nama_objek = self.model_helm.names[kelas_id].lower()
+            conf_helm = float(box.conf[0])
             hcx, hcy = (hx1 + hx2) // 2, (hy1 + hy2) // 2
             h_area = (hx2 - hx1) * (hy2 - hy1)
             current_head_centers.append((hcx, hcy))
@@ -368,6 +346,7 @@ class AIEngine:
             kecepatan_terkait = 0
             motor_wrong_way = False
 
+            # Cari motor terdekat
             motor_terdekat = None
             jarak_terdekat = 999999
 
@@ -377,16 +356,26 @@ class AIEngine:
                     mcx = (mx1 + mx2) // 2
                     mcy = (my1 + my2) // 2
                     jarak = np.hypot(hcx - mcx, hcy - mcy)
-                    box_diagonal = np.hypot(mx2 - mx1, my2 - my1)
-                    if jarak < box_diagonal * 1.5 and jarak < jarak_terdekat:
+                    if jarak < jarak_terdekat:
                         jarak_terdekat = jarak
                         motor_terdekat = v
 
-            if motor_terdekat is not None:
+            # Asosiasikan kepala ke motor terdekat
+            # Kalau ada motor di frame, selalu asosiasikan selama jarak wajar
+            if motor_terdekat is not None and jarak_terdekat < w_frame * 0.5:
                 status_kepala = motor_terdekat['status']
                 motor_terkait = motor_terdekat['box']
                 kecepatan_terkait = motor_terdekat['speed']
                 motor_wrong_way = motor_terdekat['wrong_way']
+            elif not ada_motor:
+                status_kepala = "PEJALAN_KAKI"
+            else:
+                # Ada motor tapi terlalu jauh - tetap asosiasikan ke yang terdekat
+                if motor_terdekat is not None:
+                    status_kepala = motor_terdekat['status']
+                    motor_terkait = motor_terdekat['box']
+                    kecepatan_terkait = motor_terdekat['speed']
+                    motor_wrong_way = motor_terdekat['wrong_way']
 
             if status_kepala == "PEJALAN_KAKI":
                 warna = (128, 128, 128)
@@ -399,6 +388,16 @@ class AIEngine:
                     warna = (0, 0, 255)
                     label = f"NO HELM | {int(kecepatan_terkait)} KMH"
                     jumlah_pelanggar += 1
+
+                    # Simpan semua pelanggaran helm untuk screenshot
+                    semua_pelanggaran.append({
+                        "box_kepala": (hx1, hy1, hx2, hy2),
+                        "box_motor": motor_terkait,
+                        "speed": kecepatan_terkait,
+                        "violation": "Tidak Menggunakan Helm",
+                        "area": h_area
+                    })
+
                     if h_area > max_area_pelanggar:
                         max_area_pelanggar = h_area
                         kotak_motor_pelanggar = motor_terkait
@@ -425,5 +424,6 @@ class AIEngine:
             "speed": kecepatan_pelanggar,
             "violation": pelanggaran_pelanggar,
             "valid_plates": valid_plates,
-            "centers": all_centers_memory
+            "centers": all_centers_memory,
+            "semua_pelanggaran": semua_pelanggaran
         }
