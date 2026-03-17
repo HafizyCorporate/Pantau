@@ -328,26 +328,19 @@ class AIEngine:
                     label_x = max(0, min(px1, w_frame - 150))
                     cv2.putText(frame_gambar, plat_resmi, (label_x, max(15, py1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-        # ANALISIS HELM - conf rendah + logika motor terdekat
+     # ANALISIS HELM - model langsung deteksi bike rider + helmet status
         current_head_centers = []
-        ada_motor = any(v['cls'] == 3 for v in tracked_vehicles)
-
         for box in hasil_helm[0].boxes:
             hx1, hy1, hx2, hy2 = map(int, box.xyxy[0])
             kelas_id = int(box.cls[0])
             nama_objek = self.model_helm.names[kelas_id].lower()
-            conf_helm = float(box.conf[0])
             hcx, hcy = (hx1 + hx2) // 2, (hy1 + hy2) // 2
             h_area = (hx2 - hx1) * (hy2 - hy1)
             current_head_centers.append((hcx, hcy))
 
-            status_kepala = "PEJALAN_KAKI"
-            motor_terkait = None
             kecepatan_terkait = 0
             motor_wrong_way = False
-
-            # Cari motor terdekat
-            motor_terdekat = None
+            motor_terkait = None
             jarak_terdekat = 999999
 
             for v in tracked_vehicles:
@@ -358,38 +351,15 @@ class AIEngine:
                     jarak = np.hypot(hcx - mcx, hcy - mcy)
                     if jarak < jarak_terdekat:
                         jarak_terdekat = jarak
-                        motor_terdekat = v
+                        kecepatan_terkait = v['speed']
+                        motor_wrong_way = v['wrong_way']
+                        motor_terkait = v['box']
 
-            # Asosiasikan kepala ke motor terdekat
-            # Kalau ada motor di frame, selalu asosiasikan selama jarak wajar
-            if motor_terdekat is not None and jarak_terdekat < w_frame * 0.5:
-                status_kepala = motor_terdekat['status']
-                motor_terkait = motor_terdekat['box']
-                kecepatan_terkait = motor_terdekat['speed']
-                motor_wrong_way = motor_terdekat['wrong_way']
-            elif not ada_motor:
-                status_kepala = "PEJALAN_KAKI"
-            else:
-                # Ada motor tapi terlalu jauh - tetap asosiasikan ke yang terdekat
-                if motor_terdekat is not None:
-                    status_kepala = motor_terdekat['status']
-                    motor_terkait = motor_terdekat['box']
-                    kecepatan_terkait = motor_terdekat['speed']
-                    motor_wrong_way = motor_terdekat['wrong_way']
-
-            if status_kepala == "PEJALAN_KAKI":
-                warna = (128, 128, 128)
-                label = "PEJALAN KAKI"
-            elif status_kepala == "STOPPED":
-                warna = (0, 255, 255)
-                label = "BERHENTI (AMAN)"
-            else:
-                if "no" in nama_objek or "without" in nama_objek or "bare" in nama_objek:
+            if "no" in nama_objek or "without" in nama_objek:
+                if kecepatan_terkait > 5:
                     warna = (0, 0, 255)
                     label = f"NO HELM | {int(kecepatan_terkait)} KMH"
                     jumlah_pelanggar += 1
-
-                    # Simpan semua pelanggaran helm untuk screenshot
                     semua_pelanggaran.append({
                         "box_kepala": (hx1, hy1, hx2, hy2),
                         "box_motor": motor_terkait,
@@ -397,7 +367,6 @@ class AIEngine:
                         "violation": "Tidak Menggunakan Helm",
                         "area": h_area
                     })
-
                     if h_area > max_area_pelanggar:
                         max_area_pelanggar = h_area
                         kotak_motor_pelanggar = motor_terkait
@@ -406,15 +375,26 @@ class AIEngine:
                         if motor_wrong_way:
                             pelanggaran_pelanggar = "Lawan Arah & Tidak Menggunakan Helm"
                 else:
-                    warna = (0, 255, 0)
-                    label = f"HELM | {int(kecepatan_terkait)} KMH"
+                    warna = (0, 165, 255)
+                    label = "NO HELM | BERHENTI"
+
+            elif "helmet" in nama_objek or "with" in nama_objek:
+                warna = (0, 255, 0)
+                label = f"HELM OK | {int(kecepatan_terkait)} KMH"
+
+            elif "rider" in nama_objek or "bike" in nama_objek:
+                warna = (255, 165, 0)
+                label = "PEMOTOR"
+
+            else:
+                continue
 
             cv2.rectangle(frame_gambar, (hx1, hy1), (hx2, hy2), warna, 2)
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
             label_x = max(0, min(hx1, w_frame - tw - 5))
             cv2.rectangle(frame_gambar, (label_x, hy1 - 20), (label_x + tw, hy1), warna, -1)
             cv2.putText(frame_gambar, label, (label_x, hy1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
+            
         all_centers_memory = current_centers + current_head_centers
 
         return {
