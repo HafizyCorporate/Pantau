@@ -32,7 +32,8 @@ def process_video(input_path, output_path, ai_engine):
 
         if frame_count % 3 != 0: continue
 
-        hasil = ai_engine.process_frame(frame, prev_centers, fps_asli)
+        # FPS dibagi 3 sesuai frame skip agar kecepatan tidak 3x lipat
+        hasil = ai_engine.process_frame(frame, prev_centers, fps_asli / 3)
         prev_centers = hasil["centers"]
 
         if hasil["max_area"] > largest_violator:
