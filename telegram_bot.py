@@ -20,11 +20,11 @@ def handle_video(message):
         return
 
     bot.reply_to(message, "⚙️ [SYSTEM] Memproses Video... (Arsitektur MVC Docker Aktif!)")
-    
+
     ts = int(time.time())
     input_path = f"{TEMP_FOLDER}/input_{ts}.mp4"
     output_path = f"{TEMP_FOLDER}/output_{ts}.mp4"
-    
+
     try:
         if message.content_type == 'video':
             file_id = message.video.file_id
@@ -33,39 +33,54 @@ def handle_video(message):
 
         file_info = bot.get_file(file_id)
         downloaded_file = bot.download_file(file_info.file_path)
-        
+
         with open(input_path, 'wb') as f:
             f.write(downloaded_file)
-            
+
         hasil = process_video(input_path, output_path, ai_engine)
-        
+
         with open(output_path, 'rb') as video_file:
             bot.send_video(message.chat.id, video_file, caption="🎥 *REKAMAN SELESAI*", parse_mode='Markdown')
-            
+
         if hasil["has_violation"]:
             plat = hasil["plate"]
             pel = hasil["violation"]
             speed = hasil["speed"]
             waktu = hasil["time"]
             bukti_path = hasil["evidence_path"]
-            
+            extra_bukti = hasil.get("extra_bukti", [])
+
             save_violation(plat, pel, speed, bukti_path)
-            
+
             surat = (
                 f"🚨 *BUKTI PELANGGARAN*\n\n"
                 f"No plat : `{plat}`\n"
-                f"Pelanggarannya : {pel}\n"
+                f"Pelanggaran : {pel}\n"
                 f"Kecepatan : ~{speed} KM/JAM\n"
-                f"waktu : {waktu}"
+                f"Waktu : {waktu}\n"
+                f"Total bukti : {1 + len(extra_bukti)} foto"
             )
-            
+
+            # Kirim bukti utama
             with open(bukti_path, 'rb') as foto_bukti:
                 bot.send_photo(message.chat.id, foto_bukti, caption=surat, parse_mode='Markdown')
-                
-            if os.path.exists(bukti_path): os.remove(bukti_path)
+
+            # Kirim semua extra screenshot pelanggaran
+            for i, extra_path in enumerate(extra_bukti):
+                if os.path.exists(extra_path):
+                    with open(extra_path, 'rb') as ef:
+                        bot.send_photo(
+                            message.chat.id, ef,
+                            caption=f"📸 Bukti tambahan {i+1}",
+                            parse_mode='Markdown'
+                        )
+                    os.remove(extra_path)
+
+            if os.path.exists(bukti_path):
+                os.remove(bukti_path)
         else:
             bot.send_message(message.chat.id, "✅ *AMAN:* Tidak ada pelanggar yang melintas.", parse_mode='Markdown')
-            
+
     except Exception as e:
         bot.reply_to(message, f"❌ [ERROR] {str(e)}")
     finally:
