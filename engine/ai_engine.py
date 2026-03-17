@@ -368,17 +368,25 @@ class AIEngine:
             kecepatan_terkait = 0
             motor_wrong_way = False
 
+            motor_terdekat = None
+            jarak_terdekat = 999999
+
             for v in tracked_vehicles:
                 if v['cls'] == 3:
                     mx1, my1, mx2, my2 = v['box']
-                    mw = mx2 - mx1
-                    mh = my2 - my1
-                    if (mx1 - mw*0.6) <= hcx <= (mx2 + mw*0.6) and (my1 - mh*2.0) <= hcy <= (my2 + mh*0.3):
-                        status_kepala = v['status']
-                        motor_terkait = v['box']
-                        kecepatan_terkait = v['speed']
-                        motor_wrong_way = v['wrong_way']
-                        break
+                    mcx = (mx1 + mx2) // 2
+                    mcy = (my1 + my2) // 2
+                    jarak = np.hypot(hcx - mcx, hcy - mcy)
+                    box_diagonal = np.hypot(mx2 - mx1, my2 - my1)
+                    if jarak < box_diagonal * 1.5 and jarak < jarak_terdekat:
+                        jarak_terdekat = jarak
+                        motor_terdekat = v
+
+            if motor_terdekat is not None:
+                status_kepala = motor_terdekat['status']
+                motor_terkait = motor_terdekat['box']
+                kecepatan_terkait = motor_terdekat['speed']
+                motor_wrong_way = motor_terdekat['wrong_way']
 
             if status_kepala == "PEJALAN_KAKI":
                 warna = (128, 128, 128)
