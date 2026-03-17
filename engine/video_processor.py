@@ -23,6 +23,10 @@ def process_video(input_path, output_path, ai_engine):
     prev_centers = []
     frame_count = 0
 
+    # Simpan semua frame pelanggaran yang unik
+    bukti_frames = []
+    frame_terakhir_bukti = -30  # Jarak minimal antar screenshot (30 frame)
+
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret: break
@@ -32,7 +36,6 @@ def process_video(input_path, output_path, ai_engine):
 
         if frame_count % 3 != 0: continue
 
-        # FPS dibagi 3 sesuai frame skip agar kecepatan tidak 3x lipat
         hasil = ai_engine.process_frame(frame, prev_centers, fps_asli / 3)
         prev_centers = hasil["centers"]
 
@@ -46,18 +49,30 @@ def process_video(input_path, output_path, ai_engine):
             final_violation = hasil["violation"]
             waktu_ms = current_ms
 
+        # Tangkap screenshot setiap ada pelanggaran helm baru
+        pelanggaran_frame = hasil.get("semua_pelanggaran", [])
+        if len(pelanggaran_frame) > 0 and (frame_count - frame_terakhir_bukti) >= 30:
+            frame_terakhir_bukti = frame_count
+            bukti_frames.append({
+                "frame": hasil["frame"].copy(),
+                "clean": frame.copy(),
+                "plates": hasil["valid_plates"],
+                "pelanggaran": pelanggaran_frame,
+                "waktu_ms": current_ms
+            })
+
         out.write(hasil["frame"])
 
     cap.release()
     out.release()
 
     if best_frame is not None and largest_violator > 0:
+        # Baca plat dari best frame
         plat_pelanggar = "Tidak Terbaca"
         if target_box is not None and len(all_plates) > 0:
             mx1, my1, mx2, my2 = target_box
             mw = mx2 - mx1
             mh = my2 - my1
-
             for (px1, py1, px2, py2) in all_plates:
                 pcx, pcy = (px1 + px2) // 2, (py1 + py2) // 2
                 if (mx1 - mw*0.6) <= pcx <= (mx2 + mw*0.6) and (my1 - mh*0.6) <= pcy <= (my2 + mh*0.6):
@@ -78,13 +93,21 @@ def process_video(input_path, output_path, ai_engine):
         detik_total = int(waktu_ms / 1000)
         waktu_str = f"{detik_total // 60:02d}:{detik_total % 60:02d}"
 
+        # Simpan semua screenshot pelanggaran (max 5)
+        extra_bukti = []
+        for i, bf in enumerate(bukti_frames[:5]):
+            path = f"temp/bukti_extra_{ts}_{i}.jpg"
+            cv2.imwrite(path, bf["frame"])
+            extra_bukti.append(path)
+
         return {
             "has_violation": True,
             "evidence_path": bukti_path,
             "plate": plat_pelanggar,
             "speed": int(final_speed),
             "violation": final_violation,
-            "time": waktu_str
+            "time": waktu_str,
+            "extra_bukti": extra_bukti
         }
 
     return {"has_violation": False}
