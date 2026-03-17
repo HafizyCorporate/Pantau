@@ -22,15 +22,38 @@ class AIEngine:
             self.seatbelt_enabled = False
             print(f"[WARNING] Seatbelt model tidak ditemukan: {e}")
 
-        self.PIXEL_PER_METER = 8.0
-        self.MIN_PIXEL_MOVE = 8.0
-        self.HISTORY_SIZE = 5
+        self.MIN_PIXEL_MOVE = 5.0
+        self.HISTORY_SIZE = 8
         self.speed_history = {}
         self.direction_history = {}
         self.dominant_left = None
         self.dominant_right = None
+        self.dominant_left_count = 0
+        self.dominant_right_count = 0
         self.frame_width = None
+        self.frame_height = None
         self.LANE_RATIO = 0.62
+
+        # Minimal kendaraan yang harus teramati sebelum dominant direction valid
+        self.MIN_VEHICLES_FOR_DIRECTION = 5
+        # Minimal frame konsisten sebelum dicap lawan arah
+        self.MIN_WRONG_WAY_FRAMES = 8
+        self.wrong_way_counter = {}
+
+    def _estimasi_pixel_per_meter(self, box_height):
+        """
+        Estimasi pixel per meter berdasarkan tinggi bounding box kendaraan.
+        Kendaraan jauh = kotak kecil = pixel per meter lebih besar.
+        Kendaraan dekat = kotak besar = pixel per meter lebih kecil.
+        Dikalibrasi untuk kamera CCTV sudut lebar.
+        """
+        if box_height <= 0:
+            return 10.0
+        # Asumsi tinggi motor asli ~1.2 meter
+        # Makin kecil kotak = makin jauh = makin banyak pixel per meter
+        ppm = box_height / 1.2
+        # Clamp biar tidak ekstrem
+        return max(5.0, min(ppm, 60.0))
 
     def _smooth_speed(self, vehicle_id, new_speed):
         if vehicle_id not in self.speed_history:
@@ -41,7 +64,7 @@ class AIEngine:
             history.pop(0)
         if len(history) >= 3:
             avg = sum(history[:-1]) / len(history[:-1])
-            if avg > 0 and history[-1] > avg * 3:
+            if avg > 0 and history[-1] > avg * 2.5:
                 history[-1] = avg
         return sum(history) / len(history)
 
@@ -76,36 +99,57 @@ class AIEngine:
             else:
                 right_dy.append(dy)
 
-        def majority(dy_list):
+        def majority(dy_list, current, count):
+            # Butuh minimal MIN_VEHICLES_FOR_DIRECTION kendaraan
             if len(dy_list) < 2:
-                return None
+                return current, count
             pos = sum(1 for d in dy_list if d > 0)
             neg = sum(1 for d in dy_list if d < 0)
             if pos > neg:
-                return "DOWN"
+                new_dir = "DOWN"
             elif neg > pos:
-                return "UP"
-            return None
+                new_dir = "UP"
+            else:
+                return current, count
 
-        r = majority(left_dy)
-        if r:
-            self.dominant_left = r
-        r = majority(right_dy)
-        if r:
-            self.dominant_right = r
+            if new_dir == current:
+                return current, count + 1
+            else:
+                # Arah baru, reset count
+                return new_dir, 1
+
+        self.dominant_left, self.dominant_left_count = majority(
+            left_dy, self.dominant_left, self.dominant_left_count)
+        self.dominant_right, self.dominant_right_count = majority(
+            right_dy, self.dominant_right, self.dominant_right_count)
 
     def _is_wrong_way(self, vehicle_id, cx):
-        dominant = self.dominant_left if self._get_lane(cx) == "left" else self.dominant_right
-        if dominant is None:
+        lane = self._get_lane(cx)
+        dominant = self.dominant_left if lane == "left" else self.dominant_right
+        count = self.dominant_left_count if lane == "left" else self.dominant_right_count
+
+        # Dominant direction belum cukup teramati, skip
+        if dominant is None or count < self.MIN_VEHICLES_FOR_DIRECTION:
             return False
+
         avg_dx, avg_dy = self._get_avg_direction(vehicle_id)
-        if abs(avg_dy) < 3:
+        if abs(avg_dy) < 4:
             return False
+
+        is_opposite = False
         if dominant == "DOWN" and avg_dy < -5:
-            return True
+            is_opposite = True
         if dominant == "UP" and avg_dy > 5:
-            return True
-        return False
+            is_opposite = True
+
+        if not is_opposite:
+            # Reset counter kalau sudah tidak lawan arah
+            self.wrong_way_counter[vehicle_id] = 0
+            return False
+
+        # Tambah counter, harus konsisten MIN_WRONG_WAY_FRAMES frame
+        self.wrong_way_counter[vehicle_id] = self.wrong_way_counter.get(vehicle_id, 0) + 1
+        return self.wrong_way_counter[vehicle_id] >= self.MIN_WRONG_WAY_FRAMES
 
     def cek_plat_indonesia(self, teks_list):
         teks = "".join(teks_list).upper()
@@ -140,6 +184,7 @@ class AIEngine:
         frame_gambar = frame.copy()
         h_frame, w_frame = frame.shape[:2]
         self.frame_width = w_frame
+        self.frame_height = h_frame
 
         jumlah_pelanggar = 0
         max_area_pelanggar = 0
@@ -164,6 +209,7 @@ class AIEngine:
         for idx, v in enumerate(kendaraan_mentah):
             x1, y1, x2, y2 = v['box']
             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            box_height = y2 - y1
             current_centers.append((cx, cy))
 
             is_moving = False
@@ -181,11 +227,15 @@ class AIEngine:
                     dy = cy - py_prev
                     self._update_direction(idx, dx, dy)
                     vehicles_with_direction.append((cx, dy))
-                    jarak_meter = jarak_pixel / self.PIXEL_PER_METER
+
+                    # Kecepatan pakai estimasi pixel per meter dari ukuran kendaraan
+                    ppm = self._estimasi_pixel_per_meter(box_height)
+                    jarak_meter = jarak_pixel / ppm
                     raw_speed = (jarak_meter * fps_video) * 3.6
                     speed_kmh = self._smooth_speed(idx, raw_speed)
-                    speed_kmh = min(speed_kmh, 100.0)
-                    if len(self.direction_history.get(idx, [])) >= 3:
+                    speed_kmh = min(speed_kmh, 120.0)
+
+                    if len(self.direction_history.get(idx, [])) >= self.HISTORY_SIZE:
                         is_wrong = self._is_wrong_way(idx, cx)
 
             v['speed'] = speed_kmh
