@@ -13,7 +13,6 @@ class AIEngine:
         self.model_plat = YOLO(PLATE_MODEL)
         self.reader = easyocr.Reader(['en'], gpu=False)
 
-        # Load seatbelt model
         try:
             self.model_seatbelt = YOLO(SEATBELT_MODEL)
             self.seatbelt_enabled = True
@@ -185,7 +184,7 @@ class AIEngine:
             cv2.rectangle(frame_gambar, (x1, y1), (x2, y2), warna_kendaraan, 2 if is_wrong else 1)
             cv2.putText(frame_gambar, teks_speed, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, warna_kendaraan, 1)
 
-        # CEK SABUK - khusus mobil/bus/truk
+        # CEK SABUK
         if self.seatbelt_enabled:
             for v in tracked_vehicles:
                 if v['cls'] not in [2, 5, 7]:
@@ -205,9 +204,7 @@ class AIEngine:
                         abs_x2 = x1 + bx2
                         abs_y2 = y1 + by2
                         b_area = (abs_x2 - abs_x1) * (abs_y2 - abs_y1)
-
                         no_sabuk = any(k in nama_objek for k in ["no", "without", "not", "0"])
-
                         if no_sabuk:
                             warna = (0, 0, 255)
                             label = f"NO SABUK | {int(v['speed'])} KMH"
@@ -228,7 +225,6 @@ class AIEngine:
 
         self._update_dominant_directions(vehicles_with_direction)
 
-        # Garis tengah jalur
         mid_x = w_frame // 2
         cv2.line(frame_gambar, (mid_x, 0), (mid_x, h_frame), (255, 255, 0), 1)
 
