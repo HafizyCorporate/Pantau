@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     libxext6 \
     libxrender-dev \
     libgl1 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -24,6 +25,6 @@ RUN mkdir -p temp models
 RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')" && \
     mv yolov8n.pt models/yolov8n.pt || true
 
-RUN wget -q "https://github.com/HafizyCorporate/Pantau/releases/download/v1.0/seatbelt.pt" -O models/seatbelt.pt
+RUN curl -L "https://github.com/HafizyCorporate/Pantau/releases/download/v1.0/seatbelt.pt" -o models/seatbelt.pt
 
 CMD ["python", "app.py"]
