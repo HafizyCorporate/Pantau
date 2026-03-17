@@ -27,4 +27,6 @@ RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')" && \
 
 RUN curl -L "https://github.com/HafizyCorporate/Pantau/releases/download/v1.0/seatbelt.pt" -o models/seatbelt.pt
 
+RUN curl -L "https://github.com/HafizyCorporate/Pantau/releases/download/v1.0/helmet.pt" -o models/helmet.pt
+
 CMD ["python", "app.py"]
