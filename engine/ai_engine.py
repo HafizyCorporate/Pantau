@@ -33,26 +33,51 @@ class AIEngine:
         self.frame_width = None
         self.frame_height = None
         self.LANE_RATIO = 0.62
-
-        # Minimal kendaraan yang harus teramati sebelum dominant direction valid
         self.MIN_VEHICLES_FOR_DIRECTION = 5
-        # Minimal frame konsisten sebelum dicap lawan arah
         self.MIN_WRONG_WAY_FRAMES = 8
         self.wrong_way_counter = {}
 
+    def _enhance_frame(self, frame):
+        """
+        Preprocessing frame untuk kamera kualitas rendah.
+        Perbaiki kecerahan, kontras, dan ketajaman.
+        """
+        try:
+            # 1. Denoise ringan - kurangi noise kamera jelek
+            frame = cv2.fastNlMeansDenoisingColored(frame, None, 5, 5, 7, 21)
+
+            # 2. Konversi ke LAB untuk perbaiki kecerahan saja tanpa merusak warna
+            lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+
+            # 3. CLAHE - perbaiki kontras secara lokal
+            clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+            l = clahe.apply(l)
+
+            # 4. Boost kecerahan kalau frame terlalu gelap
+            mean_brightness = np.mean(l)
+            if mean_brightness < 80:
+                l = cv2.add(l, np.array([30.0]))
+
+            # 5. Gabung kembali
+            lab = cv2.merge((l, a, b))
+            frame = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+            # 6. Sharpen
+            kernel = np.array([[0, -1, 0],
+                               [-1, 5, -1],
+                               [0, -1, 0]])
+            frame = cv2.filter2D(frame, -1, kernel)
+
+        except Exception as e:
+            print(f"[WARNING] Enhance frame gagal: {e}")
+
+        return frame
+
     def _estimasi_pixel_per_meter(self, box_height):
-        """
-        Estimasi pixel per meter berdasarkan tinggi bounding box kendaraan.
-        Kendaraan jauh = kotak kecil = pixel per meter lebih besar.
-        Kendaraan dekat = kotak besar = pixel per meter lebih kecil.
-        Dikalibrasi untuk kamera CCTV sudut lebar.
-        """
         if box_height <= 0:
             return 10.0
-        # Asumsi tinggi motor asli ~1.2 meter
-        # Makin kecil kotak = makin jauh = makin banyak pixel per meter
         ppm = box_height / 1.2
-        # Clamp biar tidak ekstrem
         return max(5.0, min(ppm, 60.0))
 
     def _smooth_speed(self, vehicle_id, new_speed):
@@ -100,7 +125,6 @@ class AIEngine:
                 right_dy.append(dy)
 
         def majority(dy_list, current, count):
-            # Butuh minimal MIN_VEHICLES_FOR_DIRECTION kendaraan
             if len(dy_list) < 2:
                 return current, count
             pos = sum(1 for d in dy_list if d > 0)
@@ -111,11 +135,9 @@ class AIEngine:
                 new_dir = "UP"
             else:
                 return current, count
-
             if new_dir == current:
                 return current, count + 1
             else:
-                # Arah baru, reset count
                 return new_dir, 1
 
         self.dominant_left, self.dominant_left_count = majority(
@@ -128,7 +150,6 @@ class AIEngine:
         dominant = self.dominant_left if lane == "left" else self.dominant_right
         count = self.dominant_left_count if lane == "left" else self.dominant_right_count
 
-        # Dominant direction belum cukup teramati, skip
         if dominant is None or count < self.MIN_VEHICLES_FOR_DIRECTION:
             return False
 
@@ -143,11 +164,9 @@ class AIEngine:
             is_opposite = True
 
         if not is_opposite:
-            # Reset counter kalau sudah tidak lawan arah
             self.wrong_way_counter[vehicle_id] = 0
             return False
 
-        # Tambah counter, harus konsisten MIN_WRONG_WAY_FRAMES frame
         self.wrong_way_counter[vehicle_id] = self.wrong_way_counter.get(vehicle_id, 0) + 1
         return self.wrong_way_counter[vehicle_id] >= self.MIN_WRONG_WAY_FRAMES
 
@@ -181,6 +200,9 @@ class AIEngine:
             return None
 
     def process_frame(self, frame, prev_centers, fps_video):
+        # Enhance frame dulu sebelum diproses AI
+        frame = self._enhance_frame(frame)
+
         frame_gambar = frame.copy()
         h_frame, w_frame = frame.shape[:2]
         self.frame_width = w_frame
@@ -227,14 +249,11 @@ class AIEngine:
                     dy = cy - py_prev
                     self._update_direction(idx, dx, dy)
                     vehicles_with_direction.append((cx, dy))
-
-                    # Kecepatan pakai estimasi pixel per meter dari ukuran kendaraan
                     ppm = self._estimasi_pixel_per_meter(box_height)
                     jarak_meter = jarak_pixel / ppm
                     raw_speed = (jarak_meter * fps_video) * 3.6
                     speed_kmh = self._smooth_speed(idx, raw_speed)
                     speed_kmh = min(speed_kmh, 120.0)
-
                     if len(self.direction_history.get(idx, [])) >= self.HISTORY_SIZE:
                         is_wrong = self._is_wrong_way(idx, cx)
 
